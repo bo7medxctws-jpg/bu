@@ -1,0 +1,52 @@
+name: Build libcurl (Win32 / MSVC static)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "curl version"
+        default: "8.22.0"
+
+jobs:
+  build:
+    runs-on: windows-2022   # Visual Studio 2022 (vc17) + CMake جاهزين
+    steps:
+      - name: Download curl source
+        shell: pwsh
+        run: |
+          $v = "${{ github.event.inputs.version }}"
+          if (-not $v) { $v = "8.22.0" }
+          Invoke-WebRequest "https://curl.se/download/curl-$v.zip" -OutFile curl.zip
+          Expand-Archive curl.zip -DestinationPath .
+          Rename-Item "curl-$v" curl-src
+
+      - name: Configure (Win32, static, Schannel, /MT)
+        shell: cmd
+        run: >
+          cmake -S curl-src -B build32 -G "Visual Studio 17 2022" -A Win32
+          -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON
+          -DCURL_USE_SCHANNEL=ON -DCURL_STATIC_CRT=ON -DENABLE_IPV6=ON
+          -DBUILD_CURL_EXE=OFF -DBUILD_TESTING=OFF
+          -DCURL_DISABLE_LDAP=ON -DCURL_USE_LIBPSL=OFF -DCURL_USE_LIBSSH2=OFF
+          -DUSE_NGHTTP2=OFF -DCURL_ZLIB=OFF -DCURL_BROTLI=OFF -DCURL_ZSTD=OFF
+
+      - name: Build
+        shell: cmd
+        run: cmake --build build32 --config Release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force libcurl | Out-Null
+          $lib = Get-ChildItem build32 -Recurse -Filter "libcurl*.lib" | Select-Object -First 1
+          Write-Host "Found: $($lib.FullName)"
+          Copy-Item $lib.FullName libcurl\libcurl_a.lib
+          Copy-Item curl-src\include\curl\*.h libcurl\
+          # تحقق من نوع الـ CRT (لازم LIBCMT زي القديمة)
+          $txt = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes("libcurl\libcurl_a.lib"))
+          if ($txt -match 'LIBCMT') { Write-Host "OK: static CRT (LIBCMT)" } else { Write-Host "WARNING: CRT is not LIBCMT" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libcurl-win32-msvc
+          path: libcurl/
